@@ -1702,6 +1702,7 @@ class BlockingChannel(object):  # pylint: disable=R0904,R0902
         You should call `BlockingChannel.cancel()` when you escape out of the
         generator loop.
 
+
         If you don't cancel this consumer, then next call on the same channel
         to `consume()` with the exact same (queue, no_ack, exclusive) parameters
         will resume the existing consumer generator; however, calling with
