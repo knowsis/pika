@@ -310,13 +310,16 @@ class BlockingConnection(base_connection.BaseConnection):
         self.socket.settimeout(self.params.socket_timeout)
         self._set_connection_state(self.CONNECTION_OPEN)
 
-    def _adapter_disconnect(self):
-        """Called if the connection is being requested to disconnect."""
-        if self.socket:
-            self.socket.close()
-        self.socket = None
-        self._check_state_on_disconnect()
-        self._init_connection_state()
+    # def _adapter_disconnect(self):
+    #     """Called if the connection is being requested to disconnect."""
+    #     if hasattr(self, 'heartbeat') and self.heartbeat is not None:
+    #         self.heartbeat.stop()
+    #
+    #     if self.socket:
+    #         self.socket.close()
+    #     self.socket = None
+    #     self._check_state_on_disconnect()
+    #     self._init_connection_state()
 
     def _call_timeout_method(self, timeout_value):
         """Execute the method that was scheduled to be called.
@@ -366,7 +369,7 @@ class BlockingConnection(base_connection.BaseConnection):
         raise exceptions for the anticipated exception types.
         """
         super(BlockingConnection, self)._check_state_on_disconnect()
-        if self.is_open:
+        if self.is_closed:
             # already logged a warning in the base class, now fire an exception
             raise exceptions.ConnectionClosed()
 
@@ -379,32 +382,32 @@ class BlockingConnection(base_connection.BaseConnection):
             except socket.timeout:
                 return self._handle_timeout()
 
-    def _on_connection_closed(self, method_frame, from_adapter=False):
-        """Called when the connection is closed remotely. The from_adapter value
-        will be true if the connection adapter has been disconnected from
-        the broker and the method was invoked directly instead of by receiving
-        a Connection.Close frame.
-
-        :param pika.frame.Method: The Connection.Close frame
-        :param bool from_adapter: Called by the connection adapter
-        :raises: pika.exceptions.ConnectionClosed
-
-        """
-        if self._is_connection_close_frame(method_frame):
-            self.closing = (method_frame.method.reply_code,
-                            method_frame.method.reply_text)
-            LOGGER.warning("Disconnected from RabbitMQ at %s:%i (%s): %s",
-                           self.params.host, self.params.port,
-                           self.closing[0], self.closing[1])
-        self._set_connection_state(self.CONNECTION_CLOSED)
-        self._remove_connection_callbacks()
-        if not from_adapter:
-            self._adapter_disconnect()
-        for channel in self._channels:
-            self._channels[channel]._on_close(method_frame)
-        self._remove_connection_callbacks()
-        if self.closing[0] not in [0, 200]:
-            raise exceptions.ConnectionClosed(*self.closing)
+    # def _on_connection_closed(self, method_frame, from_adapter=False):
+    #     """Called when the connection is closed remotely. The from_adapter value
+    #     will be true if the connection adapter has been disconnected from
+    #     the broker and the method was invoked directly instead of by receiving
+    #     a Connection.Close frame.
+    #
+    #     :param pika.frame.Method: The Connection.Close frame
+    #     :param bool from_adapter: Called by the connection adapter
+    #     :raises: pika.exceptions.ConnectionClosed
+    #
+    #     """
+    #     if self._is_connection_close_frame(method_frame):
+    #         self.closing = (method_frame.method.reply_code,
+    #                         method_frame.method.reply_text)
+    #         LOGGER.warning("Disconnected from RabbitMQ at %s:%i (%s): %s",
+    #                        self.params.host, self.params.port,
+    #                        self.closing[0], self.closing[1])
+    #     self._set_connection_state(self.CONNECTION_CLOSED)
+    #     self._remove_connection_callbacks()
+    #     if not from_adapter:
+    #         self._adapter_disconnect()
+    #     for channel in self._channels:
+    #         self._channels[channel]._on_close(method_frame)
+    #     self._remove_connection_callbacks()
+    #     if self.closing[0] not in [0, 200]:
+    #         raise exceptions.ConnectionClosed(*self.closing)
 
     def _send_frame(self, frame_value):
         """This appends the fully generated frame to send to the broker to the

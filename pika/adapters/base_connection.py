@@ -131,8 +131,10 @@ class BaseConnection(connection.Connection):
         """Invoked if the connection is being told to disconnect"""
         if hasattr(self, 'heartbeat') and self.heartbeat is not None:
             self.heartbeat.stop()
+
         if self.socket:
             self.socket.close()
+
         self.socket = None
         self._check_state_on_disconnect()
         self._handle_ioloop_stop()
