@@ -1,5 +1,6 @@
 """Core connection objects"""
 import ast
+import socket
 import sys
 import collections
 import logging
@@ -939,6 +940,7 @@ class Connection(object):
             'information': 'See http://pika.rtfd.org',
             'version': __version__
         }
+
 
     def _close_channels(self, reply_code, reply_text):
         """Close the open channels with the specified reply_code and reply_text.
