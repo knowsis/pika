@@ -1,5 +1,6 @@
 """Core connection objects"""
 import ast
+import socket
 import sys
 import collections
 import logging
@@ -887,7 +888,9 @@ class Connection(object):
         :rtype: dict
 
         """
-        return {'product': PRODUCT,
+        return {
+                'host': socket.gethostname(),
+                'product': PRODUCT,
                 'platform': 'Python %s' % platform.python_version(),
                 'capabilities': {'authentication_failure_close': True,
                                  'basic.nack': True,
