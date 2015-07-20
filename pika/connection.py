@@ -941,7 +941,6 @@ class Connection(object):
             'version': __version__
         }
 
-
     def _close_channels(self, reply_code, reply_text):
         """Close the open channels with the specified reply_code and reply_text.
 
