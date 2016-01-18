@@ -951,6 +951,7 @@ class Connection(object):
         """
         return {
             'product': PRODUCT,
+            'host': socket.gethostname(),
             'platform': 'Python %s' % platform.python_version(),
             'capabilities': {
                 'authentication_failure_close': True,
