@@ -280,7 +280,7 @@ class BlockingConnection(object):  # pylint: disable=R0902
 
     # Connection-establishment error callback args
     _OnOpenErrorArgs = namedtuple('BlockingConnection__OnOpenErrorArgs',
-                                  'connection error_text')
+                                  'connection error')
 
     # Connection-closing callback args
     _OnClosedArgs = namedtuple('BlockingConnection__OnClosedArgs',
@@ -374,8 +374,10 @@ class BlockingConnection(object):  # pylint: disable=R0902
                            self._open_error_result.is_ready)
 
         if self._open_error_result.ready:
-            raise exceptions.AMQPConnectionError(
-                self._open_error_result.value.error_text)
+            exception_or_message = self._open_error_result.value.error
+            if isinstance(exception_or_message, Exception):
+                raise exception_or_message
+            raise exceptions.AMQPConnectionError(exception_or_message)
 
         assert self._opened_result.ready
         assert self._opened_result.value.connection is self._impl
@@ -422,6 +424,13 @@ class BlockingConnection(object):  # pylint: disable=R0902
                     # NOTE: unfortunately, upon socket error, on_close_callback
                     # presently passes reason_code=0, so we don't detect that as
                     # an error
+                    if self._open_error_result.ready:
+                        maybe_exception = self._open_error_result.value.error
+                        LOGGER.critical('Connection open failed - %r',
+                                        maybe_exception)
+                        if isinstance(maybe_exception, Exception):
+                            raise maybe_exception
+
                     LOGGER.critical('Connection close detected')
                     raise exceptions.ConnectionClosed()
                 else:
@@ -681,7 +690,7 @@ class BlockingConnection(object):  # pylint: disable=R0902
         specify but it is recommended that you let Pika manage the channel
         numbers.
 
-        :rtype: pika.synchronous_connection.BlockingChannel
+        :rtype: pika.adapters.blocking_connection.BlockingChannel
         """
         with _CallbackResult(self._OnChannelOpenedArgs) as opened_args:
             impl_channel = self._impl.channel(
@@ -699,6 +708,14 @@ class BlockingConnection(object):  # pylint: disable=R0902
 
 
         return channel
+
+    def __enter__(self):
+        # Prepare `with` context
+        return self
+
+    def __exit__(self, tp, value, traceback):
+        # Close connection after `with` context
+        self.close()
 
     #
     # Connections state properties
@@ -1951,7 +1968,7 @@ class BlockingChannel(channel.Channel):
 
     def get_waiting_message_count(self):
         """Returns the number of messages that may be retrieved from the current
-        queue consumer generator via `BasicChannel.consume` without blocking.
+        queue consumer generator via `BlockingChannel.consume` without blocking.
         NEW in pika 0.10.0
 
         :rtype: int
@@ -2085,7 +2102,7 @@ class BlockingChannel(channel.Channel):
         Returns a boolean value indicating the success of the operation.
 
         This is the legacy BlockingChannel method for publishing. See also
-        `BasicChannel.publish` that provides more information about failures.
+        `BlockingChannel.publish` that provides more information about failures.
 
         For more information on basic_publish and what the parameters do, see:
 

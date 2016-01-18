@@ -7,7 +7,7 @@ requirements = list()
 if on_rtd:
     requirements.append('tornado')
     requirements.append('twisted')
-    requirements.append('pyev')
+    #requirements.append('pyev')
 
 long_description = ('Pika is a pure-Python implementation of the AMQP 0-9-1 '
                     'protocol that tries to stay fairly independent of the '
@@ -16,11 +16,7 @@ long_description = ('Pika is a pure-Python implementation of the AMQP 0-9-1 '
                     'with other AMQP 0-9-1 brokers.')
 
 setup(name='pika',
-<<<<<<< HEAD
-      version='0.10.0b2',
-=======
-      version='0.9.14.1',
->>>>>>> origin/master
+      version='0.10.0',
       description='Pika Python AMQP Client Library',
       long_description=open('README.rst').read(),
       maintainer='Gavin M. Roy',
@@ -44,6 +40,7 @@ setup(name='pika',
           'Programming Language :: Python :: 3',
           'Programming Language :: Python :: 3.3',
           'Programming Language :: Python :: 3.4',
+          'Programming Language :: Python :: 3.5',
           'Programming Language :: Python :: Implementation :: CPython',
           'Programming Language :: Python :: Implementation :: Jython',
           'Programming Language :: Python :: Implementation :: PyPy',

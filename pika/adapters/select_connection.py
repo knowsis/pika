@@ -8,7 +8,6 @@ import socket
 import select
 import errno
 import time
-from operator import itemgetter
 from collections import defaultdict
 import threading
 
@@ -28,21 +27,36 @@ WRITE = 0x0004
 ERROR = 0x0008
 
 
-if pika.compat.PY2:
-    _SELECT_ERROR = select.error
-else:
-    # select.error was deprecated and replaced by OSError in python 3.3
-    _SELECT_ERROR = OSError
+# Reason for this unconventional dict initialization is the fact that on some
+# platforms select.error is an aliases for OSError. We don't want the lambda
+# for select.error to win over one for OSError.
+_SELECT_ERROR_CHECKERS = {}
+if pika.compat.PY3:
+    #InterruptedError is undefined in PY2
+    #pylint: disable=E0602
+    _SELECT_ERROR_CHECKERS[InterruptedError] = lambda e: True
+_SELECT_ERROR_CHECKERS[select.error] = lambda e: e.args[0] == errno.EINTR
+_SELECT_ERROR_CHECKERS[IOError] = lambda e: e.errno == errno.EINTR
+_SELECT_ERROR_CHECKERS[OSError] = lambda e: e.errno == errno.EINTR
 
 
-def _get_select_errno(error):
-    if pika.compat.PY2:
-        assert isinstance(error, select.error), repr(error)
-        return error.args[0]
+# We can reduce the number of elements in the list by looking at super-sub
+# class relationship because only the most generic ones needs to be caught.
+# For now the optimization is left out.
+# Following is better but still incomplete.
+#_SELECT_ERRORS = tuple(filter(lambda e: not isinstance(e, OSError),
+#                              _SELECT_ERROR_CHECKERS.keys())
+#                       + [OSError])
+_SELECT_ERRORS = tuple(_SELECT_ERROR_CHECKERS.keys())
+
+def _is_resumable(exc):
+    ''' Check if caught exception represents EINTR error.
+    :param exc: exception; must be one of classes in _SELECT_ERRORS '''
+    checker = _SELECT_ERROR_CHECKERS.get(exc.__class__, None)
+    if checker is not None:
+        return checker(exc)
     else:
-        assert isinstance(error, OSError), repr(error)
-        return error.errno
-
+        return False
 
 class SelectConnection(BaseConnection):
     """An asynchronous connection adapter that attempts to use the fastest
@@ -262,22 +276,32 @@ class SelectPoller(object):
             timeout = SelectPoller.POLL_TIMEOUT
 
         timeout = min((timeout, SelectPoller.POLL_TIMEOUT))
-        return timeout * SelectPoller.POLL_TIMEOUT_MULT
+        return timeout * self.POLL_TIMEOUT_MULT
+
 
     def process_timeouts(self):
         """Process the self._timeouts event stack"""
 
         now = time.time()
-        to_run = [timer for timer in self._timeouts.values()
-                  if timer['deadline'] <= now]
-
         # Run the timeouts in order of deadlines. Although this shouldn't
         # be strictly necessary it preserves old behaviour when timeouts
         # were only run periodically.
-        for t in sorted(to_run, key=itemgetter('deadline')):
-            t['callback']()
-            del self._timeouts[hash(frozenset(t.items()))]
-            self._next_timeout = None
+        to_run = sorted([(k, timer) for (k, timer) in self._timeouts.items()
+                         if timer['deadline'] <= now],
+                        key=lambda item: item[1]['deadline'])
+
+        for k, timer in to_run:
+            if k not in self._timeouts:
+                # Previous invocation(s) should have deleted the timer.
+                continue
+            try:
+                timer['callback']()
+            finally:
+                # Don't do 'del self._timeout[k]' as the key might
+                # have been deleted just now.
+                if self._timeouts.pop(k, None) is not None:
+                    self._next_timeout = None
+
 
     def add_handler(self, fileno, handler, events):
         """Add a new fileno to the set to be monitored
@@ -390,8 +414,8 @@ class SelectPoller(object):
                                                    self._fd_events[ERROR],
                                                    self.get_next_deadline())
                 break
-            except _SELECT_ERROR as error:
-                if _get_select_errno(error) == errno.EINTR:
+            except _SELECT_ERRORS as error:
+                if _is_resumable(error):
                     continue
                 else:
                     raise
@@ -505,8 +529,8 @@ class KQueuePoller(SelectPoller):
                 kevents = self._kqueue.control(None, 1000,
                                                self.get_next_deadline())
                 break
-            except _SELECT_ERROR as error:
-                if _get_select_errno(error) == errno.EINTR:
+            except _SELECT_ERRORS as error:
+                if _is_resumable(error):
                     continue
                 else:
                     raise
@@ -580,8 +604,8 @@ class PollPoller(SelectPoller):
             try:
                 events = self._poll.poll(self.get_next_deadline())
                 break
-            except _SELECT_ERROR as error:
-                if _get_select_errno(error) == errno.EINTR:
+            except _SELECT_ERRORS as error:
+                if _is_resumable(error):
                     continue
                 else:
                     raise

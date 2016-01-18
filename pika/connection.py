@@ -7,7 +7,6 @@ import logging
 import math
 import platform
 import threading
-import urllib
 import warnings
 
 if sys.version_info > (3,):
@@ -26,7 +25,7 @@ from pika import utils
 
 from pika import spec
 
-from pika.compat import basestring, url_unquote, dictkeys
+from pika.compat import xrange, basestring, url_unquote, dictkeys
 
 
 BACKPRESSURE_WARNING = ("Pika: Write buffer exceeded warning threshold at "
@@ -101,7 +100,8 @@ class Parameters(object):
                 (self.__class__.__name__, self.host, self.port,
                  self.virtual_host, self.ssl))
 
-    def _credentials(self, username, password):
+    @staticmethod
+    def _credentials(username, password):
         """Return a plain credentials object for the specified username and
         password.
 
@@ -112,7 +112,8 @@ class Parameters(object):
         """
         return pika_credentials.PlainCredentials(username, password)
 
-    def _validate_backpressure(self, backpressure_detection):
+    @staticmethod
+    def _validate_backpressure(backpressure_detection):
         """Validate that the backpressure detection option is a bool.
 
         :param bool backpressure_detection: The backpressure detection value
@@ -124,7 +125,8 @@ class Parameters(object):
             raise TypeError('backpressure detection must be a bool')
         return True
 
-    def _validate_channel_max(self, channel_max):
+    @staticmethod
+    def _validate_channel_max(channel_max):
         """Validate that the channel_max value is an int
 
         :param int channel_max: The value to validate
@@ -139,7 +141,8 @@ class Parameters(object):
             raise ValueError('channel_max must be <= 65535 and > 0')
         return True
 
-    def _validate_connection_attempts(self, connection_attempts):
+    @staticmethod
+    def _validate_connection_attempts(connection_attempts):
         """Validate that the connection_attempts value is an int
 
         :param int connection_attempts: The value to validate
@@ -154,7 +157,8 @@ class Parameters(object):
             raise ValueError('connection_attempts must be None or > 0')
         return True
 
-    def _validate_credentials(self, credentials):
+    @staticmethod
+    def _validate_credentials(credentials):
         """Validate the credentials passed in are using a valid object type.
 
         :param pika.credentials.Credentials credentials: Credentials to validate
@@ -168,7 +172,8 @@ class Parameters(object):
         raise TypeError('Credentials must be an object of type: %r' %
                         pika_credentials.VALID_TYPES)
 
-    def _validate_frame_max(self, frame_max):
+    @staticmethod
+    def _validate_frame_max(frame_max):
         """Validate that the frame_max value is an int and does not exceed
          the maximum frame size and is not less than the frame min size.
 
@@ -186,7 +191,8 @@ class Parameters(object):
             raise exceptions.InvalidMaximumFrameSize
         return True
 
-    def _validate_heartbeat_interval(self, heartbeat_interval):
+    @staticmethod
+    def _validate_heartbeat_interval(heartbeat_interval):
         """Validate that the heartbeat_interval value is an int
 
         :param int heartbeat_interval: The value to validate
@@ -196,12 +202,13 @@ class Parameters(object):
 
         """
         if not isinstance(heartbeat_interval, int):
-            raise TypeError('heartbeat must be an int')
+            raise TypeError('heartbeat_interval must be an int')
         if heartbeat_interval < 0:
             raise ValueError('heartbeat_interval must >= 0')
         return True
 
-    def _validate_host(self, host):
+    @staticmethod
+    def _validate_host(host):
         """Validate that the host value is an str
 
         :param str|unicode host: The value to validate
@@ -213,7 +220,8 @@ class Parameters(object):
             raise TypeError('host must be a str or unicode str')
         return True
 
-    def _validate_locale(self, locale):
+    @staticmethod
+    def _validate_locale(locale):
         """Validate that the locale value is an str
 
         :param str locale: The value to validate
@@ -225,7 +233,8 @@ class Parameters(object):
             raise TypeError('locale must be a str')
         return True
 
-    def _validate_port(self, port):
+    @staticmethod
+    def _validate_port(port):
         """Validate that the port value is an int
 
         :param int port: The value to validate
@@ -237,7 +246,8 @@ class Parameters(object):
             raise TypeError('port must be an int')
         return True
 
-    def _validate_retry_delay(self, retry_delay):
+    @staticmethod
+    def _validate_retry_delay(retry_delay):
         """Validate that the retry_delay value is an int or float
 
         :param int|float retry_delay: The value to validate
@@ -250,7 +260,8 @@ class Parameters(object):
             raise TypeError('retry_delay must be a float or int')
         return True
 
-    def _validate_socket_timeout(self, socket_timeout):
+    @staticmethod
+    def _validate_socket_timeout(socket_timeout):
         """Validate that the socket_timeout value is an int or float
 
         :param int|float socket_timeout: The value to validate
@@ -265,7 +276,8 @@ class Parameters(object):
             raise ValueError('socket_timeout must be > 0')
         return True
 
-    def _validate_ssl(self, ssl):
+    @staticmethod
+    def _validate_ssl(ssl):
         """Validate the SSL toggle is a bool
 
         :param bool ssl: The SSL enabled/disabled value
@@ -277,7 +289,8 @@ class Parameters(object):
             raise TypeError('ssl must be a bool')
         return True
 
-    def _validate_ssl_options(self, ssl_options):
+    @staticmethod
+    def _validate_ssl_options(ssl_options):
         """Validate the SSL options value is a dictionary.
 
         :param dict|None ssl_options: SSL Options to validate
@@ -289,7 +302,8 @@ class Parameters(object):
             raise TypeError('ssl_options must be either None or dict')
         return True
 
-    def _validate_virtual_host(self, virtual_host):
+    @staticmethod
+    def _validate_virtual_host(virtual_host):
         """Validate that the virtual_host value is an str
 
         :param str virtual_host: The value to validate
@@ -382,22 +396,22 @@ class ConnectionParameters(Parameters):
         if locale and self._validate_locale(locale):
             self.locale = locale
         if (heartbeat_interval is not None and
-            self._validate_heartbeat_interval(heartbeat_interval)):
+                self._validate_heartbeat_interval(heartbeat_interval)):
             self.heartbeat = heartbeat_interval
         if ssl is not None and self._validate_ssl(ssl):
             self.ssl = ssl
         if ssl_options and self._validate_ssl_options(ssl_options):
             self.ssl_options = ssl_options or dict()
         if (connection_attempts is not None and
-            self._validate_connection_attempts(connection_attempts)):
+                self._validate_connection_attempts(connection_attempts)):
             self.connection_attempts = connection_attempts
         if retry_delay is not None and self._validate_retry_delay(retry_delay):
             self.retry_delay = retry_delay
         if (socket_timeout is not None and
-            self._validate_socket_timeout(socket_timeout)):
+                self._validate_socket_timeout(socket_timeout)):
             self.socket_timeout = socket_timeout
         if (backpressure_detection is not None and
-            self._validate_backpressure(backpressure_detection)):
+                self._validate_backpressure(backpressure_detection)):
             self.backpressure_detection = backpressure_detection
 
 
@@ -419,7 +433,7 @@ class URLParameters(Parameters):
             Specify how many times pika should try and reconnect before it gives up
         - frame_max:
             Override the default maximum frame size for communication
-        - heartbeat_interval:
+        - heartbeat:
             Specify the number of seconds between heartbeat frames to ensure that
             the link between RabbitMQ and your application is up
         - locale:
@@ -509,30 +523,38 @@ class URLParameters(Parameters):
                                  values['backpressure_detection'])
 
         if ('channel_max' in values and
-            self._validate_channel_max(values['channel_max'])):
+                self._validate_channel_max(values['channel_max'])):
             self.channel_max = values['channel_max']
 
         if ('connection_attempts' in values and
-            self._validate_connection_attempts(values['connection_attempts'])):
+                self._validate_connection_attempts(
+                    values['connection_attempts'])):
             self.connection_attempts = values['connection_attempts']
 
         if ('frame_max' in values and
-            self._validate_frame_max(values['frame_max'])):
+                self._validate_frame_max(values['frame_max'])):
             self.frame_max = values['frame_max']
 
-        if ('heartbeat_interval' in values and
-            self._validate_heartbeat_interval(values['heartbeat_interval'])):
+        if ('heartbeat' in values and
+                self._validate_heartbeat_interval(values['heartbeat'])):
+            self.heartbeat = values['heartbeat']
+
+        elif ('heartbeat_interval' in values and
+                self._validate_heartbeat_interval(
+                    values['heartbeat_interval'])):
+            warnings.warn('heartbeat_interval is deprecated, use heartbeat',
+                          DeprecationWarning, stacklevel=2)
             self.heartbeat = values['heartbeat_interval']
 
-        if ('locale' in values and self._validate_locale(values['locale'])):
+        if 'locale' in values and self._validate_locale(values['locale']):
             self.locale = values['locale']
 
         if ('retry_delay' in values and
-            self._validate_retry_delay(values['retry_delay'])):
+                self._validate_retry_delay(values['retry_delay'])):
             self.retry_delay = values['retry_delay']
 
         if ('socket_timeout' in values and
-            self._validate_socket_timeout(values['socket_timeout'])):
+                self._validate_socket_timeout(values['socket_timeout'])):
             self.socket_timeout = values['socket_timeout']
 
         if 'ssl_options' in values:
@@ -1183,13 +1205,13 @@ class Connection(object):
 
         """
         limit = self.params.channel_max or channel.MAX_CHANNELS
-        if len(self._channels) == limit:
+        if len(self._channels) >= limit:
             raise exceptions.NoFreeChannels()
 
-        ckeys = set(self._channels.keys())
-        if not ckeys:
-            return 1
-        return [x + 1 for x in sorted(ckeys) if x + 1 not in ckeys][0]
+        for n in xrange(1, len(self._channels) + 1):
+            if n not in self._channels:
+                return n
+        return len(self._channels) + 1
 
     def _on_channel_cleanup(self, channel):
         """Remove the channel from the dict of channels when Channel.CloseOk is
