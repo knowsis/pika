@@ -148,8 +148,6 @@ class BaseConnection(connection.Connection):
 
     def _adapter_disconnect(self):
         """Invoked if the connection is being told to disconnect"""
-<<<<<<< HEAD
-
         try:
             self._remove_heartbeat()
             self._cleanup_socket()
@@ -159,18 +157,6 @@ class BaseConnection(connection.Connection):
             # an exception
             self._handle_ioloop_stop()
             self._init_connection_state()
-=======
-        if hasattr(self, 'heartbeat') and self.heartbeat is not None:
-            self.heartbeat.stop()
-
-        if self.socket:
-            self.socket.close()
-
-        self.socket = None
-        self._check_state_on_disconnect()
-        self._handle_ioloop_stop()
-        self._init_connection_state()
->>>>>>> origin/master
 
     def _check_state_on_disconnect(self):
         """Checks to see if we were in opening a connection with RabbitMQ when
