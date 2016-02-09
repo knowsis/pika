@@ -26,10 +26,11 @@ class Channel(object):
     method.
 
     """
+
     CLOSED = 0
     OPENING = 1
     OPEN = 2
-    CLOSING = 3
+    CLOSING = 3  # client-initiated close in progress
 
     _ON_CHANNEL_CLEANUP_CB_KEY = '_on_channel_cleanup'
 
@@ -615,7 +616,8 @@ class Channel(object):
 
     @property
     def is_closing(self):
-        """Returns True if the channel is closing.
+        """Returns True if client-initiated closing of the channel is in
+        progress.
 
         :rtype: bool
 
@@ -1105,8 +1107,7 @@ class Channel(object):
         blocking state and register for `_on_synchronous_complete` before
         sending the request.
 
-        NOTE: A populated callback must be accompanied by populated
-        acceptable_replies.
+        NOTE: A callback must be accompanied by non-empty acceptable_replies.
 
         :param pika.amqp_object.Method method_frame: The method frame to call
         :param method callback: The callback for the RPC response
@@ -1123,11 +1124,11 @@ class Channel(object):
 
         # Validate the callback is callable
         if callback is not None and not is_callable(callback):
-            raise TypeError('callback should be None, a function or method.')
+            raise TypeError('callback should be None, a function, or method.')
 
         if callback is not None and not acceptable_replies:
-            raise ValueError('A populated callback must be accompanied by '
-                             'populated acceptable_replies')
+            raise ValueError(
+                'Unexpected callback for asynchronous (nowait) operation.')
 
         # Make sure the channel is open
         if self.is_closed:

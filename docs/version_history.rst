@@ -7,6 +7,15 @@ Next Release
  - Connection failures that occur after the socket is opened and before the
    AMQP connection is ready to go are now reported by calling the connection
    error callback.  Previously these were not consistently reported.
+ - In BaseConnection.close, call _handle_ioloop_stop only if the connection is
+   already closed to allow the asynchronous close operation to complete
+   gracefully.
+ - Pass error information from failed socket connection to user callbacks
+   on_open_error_callback and on_close_callback with result_code=-1.
+ - ValueError is raised when a completion callback is passed to an asynchronous
+   (nowait) Channel operation. It's an application error to pass a non-None
+   completion callback with an asynchronous request, because this callback can
+   never be serviced in the asynchronous scenario.
 
 0.10.0 2015-09-02
 -----------------

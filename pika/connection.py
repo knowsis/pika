@@ -5,6 +5,7 @@ import sys
 import collections
 import logging
 import math
+import numbers
 import platform
 import threading
 import warnings
@@ -361,7 +362,7 @@ class ConnectionParameters(Parameters):
         :param int channel_max: Maximum number of channels to allow
         :param int frame_max: The maximum byte size for an AMQP frame
         :param int heartbeat_interval: How often to send heartbeats.
-                                  Min between this value and server's proposal
+                                  Max between this value and server's proposal
                                   will be used. Use 0 to deactivate heartbeats
                                   and None to accept server's proposal.
         :param bool ssl: Enable SSL
@@ -587,7 +588,7 @@ class Connection(object):
     CONNECTION_START = 3
     CONNECTION_TUNE = 4
     CONNECTION_OPEN = 5
-    CONNECTION_CLOSING = 6
+    CONNECTION_CLOSING = 6  # client-initiated close in progress
 
     def __init__(self,
                  parameters=None,
@@ -603,9 +604,10 @@ class Connection(object):
 
         :param pika.connection.Parameters parameters: Connection parameters
         :param method on_open_callback: Called when the connection is opened
-        :param method on_open_error_callback: Called if the connection cant
-                                       be opened
-        :param method on_close_callback: Called when the connection is closed
+        :param method on_open_error_callback: Called if the connection can't
+            be established: on_open_error_callback(connection, str|exception)
+        :param method on_close_callback: Called when the connection is closed:
+            on_close_callback(connection, reason_code, reason_text)
 
         """
         self._write_lock = threading.Lock()
@@ -771,8 +773,9 @@ class Connection(object):
         self.remaining_connection_attempts -= 1
         LOGGER.warning('Could not connect, %i attempts left',
                        self.remaining_connection_attempts)
-        if self.remaining_connection_attempts:
+        if self.remaining_connection_attempts > 0:
             LOGGER.info('Retrying in %i seconds', self.params.retry_delay)
+            # TODO: remove timeout if connection is closed before timer fires
             self.add_timeout(self.params.retry_delay, self.connect)
         else:
             self.callbacks.process(0, self.ON_CONNECTION_ERROR, self, self,
@@ -814,7 +817,8 @@ class Connection(object):
     @property
     def is_closing(self):
         """
-        Returns a boolean reporting the current connection state.
+        Returns True if connection is in the process of closing due to
+        client-initiated `close` request, but closing is not yet complete.
         """
         return self.connection_state == self.CONNECTION_CLOSING
 
@@ -1162,6 +1166,13 @@ class Connection(object):
         # Our starting point once connected, first frame received
         self._add_connection_start_callback()
 
+        # Add a callback handler for the Broker telling us to disconnect.
+        # NOTE: As of RabbitMQ 3.6.0, RabbitMQ broker may send Connection.Close
+        # to signal error during connection setup (and wait a longish time
+        # before closing the TCP/IP stream). Earlier RabbitMQ versions
+        # simply closed the TCP/IP stream.
+        self.callbacks.add(0, spec.Connection.Close, self._on_connection_close)
+
     def _is_basic_deliver_frame(self, frame_value):
         """Returns true if the frame is a Basic.Deliver
 
@@ -1170,17 +1181,6 @@ class Connection(object):
 
         """
         return isinstance(frame_value, spec.Basic.Deliver)
-
-    def _is_connection_close_frame(self, value):
-        """Returns true if the frame is a Connection.Close frame.
-
-        :param pika.frame.Method value: The frame to check
-        :rtype: bool
-
-        """
-        if not value:
-            return False
-        return isinstance(value.method, spec.Connection.Close)
 
     def _is_method_frame(self, value):
         """Returns true if the frame is a method frame.
@@ -1252,32 +1252,29 @@ class Connection(object):
         # Start the communication with the RabbitMQ Broker
         self._send_frame(frame.ProtocolHeader())
 
-    def _on_connection_closed(self, method_frame, from_adapter=False):
-        """Called when the connection is closed remotely. The from_adapter value
-        will be true if the connection adapter has been disconnected from
-        the broker and the method was invoked directly instead of by receiving
-        a Connection.Close frame.
+    def _on_connection_close(self, method_frame):
+        """Called when the connection is closed remotely via Connection.Close
+        frame from broker.
 
-        :param pika.frame.Method: The Connection.Close frame
-        :param bool from_adapter: Called by the connection adapter
+        :param pika.frame.Method method_frame: The Connection.Close frame
 
         """
-        if method_frame and self._is_connection_close_frame(method_frame):
-            self.closing = (method_frame.method.reply_code,
-                            method_frame.method.reply_text)
+        LOGGER.debug('_on_connection_close: frame=%s', method_frame)
 
-        # Save the codes because self.closing gets reset by _adapter_disconnect
-        reply_code, reply_text = self.closing
+        self.closing = (method_frame.method.reply_code,
+                        method_frame.method.reply_text)
 
-        # Stop the heartbeat checker if it exists
-        self._remove_heartbeat()
+        self._on_terminate(self.closing[0], self.closing[1])
 
-        # If this did not come from the connection adapter, close the socket
-        if not from_adapter:
-            self._adapter_disconnect()
+    def _on_connection_close_ok(self, method_frame):
+        """Called when Connection.CloseOk is received from remote.
 
-        # Invoke a method frame neutral close
-        self._on_disconnect(reply_code, reply_text)
+        :param pika.frame.Method method_frame: The Connection.CloseOk frame
+
+        """
+        LOGGER.debug('_on_connection_close_ok: frame=%s', method_frame)
+
+        self._on_terminate(self.closing[0], self.closing[1])
 
     def _on_connection_error(self, connection_unused, error_message=None):
         """Default behavior when the connecting connection can not connect.
@@ -1295,9 +1292,6 @@ class Connection(object):
         Connection.Ok.
         """
         self.known_hosts = method_frame.method.known_hosts
-
-        # Add a callback handler for the Broker telling us to disconnect
-        self.callbacks.add(0, spec.Connection.Close, self._on_connection_closed)
 
         # We're now connected at the AMQP level
         self._set_connection_state(self.CONNECTION_OPEN)
@@ -1321,6 +1315,52 @@ class Connection(object):
         self._add_connection_tune_callback()
         self._send_connection_start_ok(*self._get_credentials(method_frame))
 
+
+    @staticmethod
+    def _tune_heartbeat_timeout(client_value, server_value):
+        """ Determine heartbeat timeout per AMQP 0-9-1 rules
+
+        Per https://www.rabbitmq.com/resources/specs/amqp0-9-1.pdf,
+
+        > Both peers negotiate the limits to the lowest agreed value as follows:
+        > - The server MUST tell the client what limits it proposes.
+        > - The client responds and **MAY reduce those limits** for its
+            connection
+
+        When negotiating heartbeat timeout, the reasoning needs to be reversed.
+        The way I think it makes sense to interpret this rule for heartbeats is
+        that the consumable resource is the frequency of heartbeats, which is
+        the inverse of the timeout. The more frequent heartbeats consume more
+        resources than less frequent heartbeats. So, when both heartbeat
+        timeouts are non-zero, we should pick the max heartbeat timeout rather
+        than the min. The heartbeat timeout value 0 (zero) has a special
+        meaning - it's supposed to disable the timeout. This makes zero a
+        setting for the least frequent heartbeats (i.e., never); therefore, if
+        any (or both) of the two is zero, then the above rules would suggest
+        that negotiation should yield 0 value for heartbeat, effectively turning
+        it off.
+
+        :param client_value: None to accept server_value; otherwise, an integral
+            number in seconds; 0 (zero) to disable heartbeat.
+        :param server_value: integral value of the heartbeat timeout proposed by
+            broker; 0 (zero) to disable heartbeat.
+
+        :returns: the value of the heartbeat timeout to use and return to broker
+        """
+        if client_value is None:
+            # Accept server's limit
+            timeout = server_value
+        elif client_value == 0 or server_value == 0:
+            # 0 has a special meaning "disable heartbeats", which makes it the
+            # least frequent heartbeat value there is
+            timeout = 0
+        else:
+            # Pick the one with the bigger heartbeat timeout (i.e., the less
+            # frequent one)
+            timeout = max(client_value, server_value)
+
+        return timeout
+
     def _on_connection_tune(self, method_frame):
         """Once the Broker sends back a Connection.Tune, we will set our tuning
         variables that have been returned to us and kick off the Heartbeat
@@ -1337,11 +1377,11 @@ class Connection(object):
                                                 method_frame.method.channel_max)
         self.params.frame_max = self._combine(self.params.frame_max,
                                               method_frame.method.frame_max)
-        if self.params.heartbeat is None:
-            self.params.heartbeat = method_frame.method.heartbeat
-        elif self.params.heartbeat != 0:
-            self.params.heartbeat = self._combine(self.params.heartbeat,
-                                                  method_frame.method.heartbeat)
+
+        # Negotiate heatbeat timeout
+        self.params.heartbeat = self._tune_heartbeat_timeout(
+            client_value=self.params.heartbeat,
+            server_value=method_frame.method.heartbeat)
 
         # Calculate the maximum pieces for body frames
         self._body_max_length = self._get_body_frame_max_length()
@@ -1370,27 +1410,89 @@ class Connection(object):
             self._trim_frame_buffer(consumed_count)
             self._process_frame(frame_value)
 
-    def _on_disconnect(self, reply_code, reply_text):
-        """Invoke passing in the reply_code and reply_text from internal
-        methods to the adapter. Called from on_connection_closed and Heartbeat
-        timeouts.
+    def _on_terminate(self, reason_code, reason_text):
+        """Terminate the connection and notify registered ON_CONNECTION_ERROR
+        and/or ON_CONNECTION_CLOSED callbacks
 
-        :param str reply_code: The numeric close code
-        :param str reply_text: The text close reason
-
+        :param integer reason_code: HTTP error code for AMQP-reported closures
+          or -1 for other errors (such as socket errors)
+        :param str reason_text: human-readable text message describing the error
         """
-        LOGGER.warning('Disconnected from RabbitMQ at %s:%i (%s): %s',
-                       self.params.host, self.params.port, reply_code,
-                       reply_text)
+        LOGGER.warning(
+            'Disconnected from RabbitMQ at %s:%i (%s): %s',
+            self.params.host, self.params.port, reason_code,
+            reason_text)
+
+        if not isinstance(reason_code, numbers.Integral):
+            raise TypeError('reason_code must be an integer, but got %r'
+                            % (reason_code,))
+
+        # Stop the heartbeat checker if it exists
+        self._remove_heartbeat()
+
+        # Remove connection management callbacks
+        # TODO: This call was moved here verbatim from legacy code and the
+        # following doesn't seem to be right: `Connection.Open` here is
+        # unexpected, we don't appear to ever register it, and the broker
+        # shouldn't be sending `Connection.Open` to us, anyway.
+        self._remove_callbacks(0, [spec.Connection.Close, spec.Connection.Start,
+                                   spec.Connection.Open])
+
+        # Close the socket
+        self._adapter_disconnect()
+
+        # Determine whether this was an error during connection setup
+        connection_error = None
+
+        if self.connection_state == self.CONNECTION_PROTOCOL:
+            LOGGER.error('Incompatible Protocol Versions')
+            connection_error = exceptions.IncompatibleProtocolError(
+                reason_code,
+                reason_text)
+        elif self.connection_state == self.CONNECTION_START:
+            LOGGER.error('Connection closed while authenticating indicating a '
+                         'probable authentication error')
+            connection_error = exceptions.ProbableAuthenticationError(
+                reason_code,
+                reason_text)
+        elif self.connection_state == self.CONNECTION_TUNE:
+            LOGGER.error('Connection closed while tuning the connection '
+                         'indicating a probable permission error when '
+                         'accessing a virtual host')
+            connection_error = exceptions.ProbableAccessDeniedError(
+                reason_code,
+                reason_text)
+        elif self.connection_state not in [self.CONNECTION_OPEN,
+                                           self.CONNECTION_CLOSED,
+                                           self.CONNECTION_CLOSING]:
+            LOGGER.warning('Unexpected connection state on disconnect: %i',
+                           self.connection_state)
+
+        # Transition to closed state
         self._set_connection_state(self.CONNECTION_CLOSED)
+
+        # Inform our channel proxies
         for channel in dictkeys(self._channels):
             if channel not in self._channels:
                 continue
-            method_frame = frame.Method(channel, spec.Channel.Close(reply_code,
-                                                                    reply_text))
+            method_frame = frame.Method(channel, spec.Channel.Close(
+                reason_code,
+                reason_text))
             self._channels[channel]._on_close(method_frame)
-        self._process_connection_closed_callbacks(reply_code, reply_text)
-        self._remove_connection_callbacks()
+
+        # Inform interested parties
+        if connection_error is not None:
+            LOGGER.error('Connection setup failed due to %r', connection_error)
+            self.callbacks.process(0,
+                                   self.ON_CONNECTION_ERROR,
+                                   self, self,
+                                   connection_error)
+
+        self.callbacks.process(0, self.ON_CONNECTION_CLOSED, self, self,
+                               reason_code, reason_text)
+
+        # Reset connection properties
+        self._init_connection_state()
 
     def _process_callbacks(self, frame_value):
         """Process the callbacks for the frame if the frame is a method frame
@@ -1408,17 +1510,6 @@ class Connection(object):
                                    frame_value)  # Args
             return True
         return False
-
-    def _process_connection_closed_callbacks(self, reason_code, reason_text):
-        """Process any callbacks that should be called when the connection is
-        closed.
-
-        :param str reason_code: The numeric code from RabbitMQ for the close
-        :param str reason_text: The text reason fro closing
-
-        """
-        self.callbacks.process(0, self.ON_CONNECTION_CLOSED, self, self,
-                               reason_code, reason_text)
 
     def _process_frame(self, frame_value):
         """Process an inbound frame from the socket.
@@ -1491,11 +1582,6 @@ class Connection(object):
         for method_frame in method_frames:
             self._remove_callback(channel_number, method_frame)
 
-    def _remove_connection_callbacks(self):
-        """Remove all callbacks for the connection"""
-        self._remove_callbacks(0, [spec.Connection.Close, spec.Connection.Start,
-                                   spec.Connection.Open])
-
     def _rpc(self, channel_number, method_frame,
              callback_method=None,
              acceptable_replies=None):
@@ -1532,7 +1618,7 @@ class Connection(object):
 
         """
         self._rpc(0, spec.Connection.Close(reply_code, reply_text, 0, 0),
-                  self._on_connection_closed, [spec.Connection.CloseOk])
+                  self._on_connection_close_ok, [spec.Connection.CloseOk])
 
     def _send_connection_open(self):
         """Send a Connection.Open frame"""

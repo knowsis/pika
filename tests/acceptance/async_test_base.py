@@ -17,6 +17,12 @@ _TARGET = platform.python_implementation()
 
 import uuid
 
+try:
+    from unittest import mock
+except ImportError:
+    import mock
+
+
 import pika
 from pika import adapters
 from pika.adapters import select_connection
@@ -31,6 +37,7 @@ class AsyncTestCase(unittest.TestCase):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.parameters = pika.URLParameters(
             'amqp://guest:guest@localhost:5672/%2F')
+        self._timed_out = False
         super(AsyncTestCase, self).setUp()
 
     def tearDown(self):
@@ -56,16 +63,18 @@ class AsyncTestCase(unittest.TestCase):
         self.timeout = self.connection.add_timeout(self.TIMEOUT,
                                                    self.on_timeout)
         self.connection.ioloop.start()
+        self.assertFalse(self._timed_out)
 
     def stop(self):
         """close the connection and stop the ioloop"""
         self.logger.info("Stopping test")
-        self.connection.remove_timeout(self.timeout)
-        self.timeout = None
+        if self.timeout is not None:
+            self.connection.remove_timeout(self.timeout)
+            self.timeout = None
         self.connection.close()
 
     def _stop(self):
-        if hasattr(self, 'timeout') and self.timeout:
+        if hasattr(self, 'timeout') and self.timeout is not None:
             self.logger.info("Removing timeout")
             self.connection.remove_timeout(self.timeout)
             self.timeout = None
@@ -91,11 +100,12 @@ class AsyncTestCase(unittest.TestCase):
 
     def on_timeout(self):
         """called when stuck waiting for connection to close"""
-        self.logger.info('on_timeout at %s', datetime.utcnow())
-        # force the ioloop to stop
-        self.logger.debug('on_timeout called')
-        self.connection.ioloop.stop()
-        raise AssertionError('Test timed out')
+        self.logger.error('%s timed out; on_timeout called at %s',
+            self, datetime.utcnow())
+        self.timeout = None  # the dispatcher should have removed it
+        self._timed_out = True
+        # initiate cleanup
+        self.stop()
 
 
 class BoundQueueTestCase(AsyncTestCase):
@@ -144,43 +154,48 @@ class AsyncAdapters(object):
         raise NotImplementedError
 
     def select_default_test(self):
-        "SelectConnection:DefaultPoller"
-        select_connection.POLLER_TYPE = None
-        self.start(adapters.SelectConnection)
+        """SelectConnection:DefaultPoller"""
+
+        with mock.patch.multiple(select_connection, SELECT_TYPE=None):
+            self.start(adapters.SelectConnection)
 
     def select_select_test(self):
-        "SelectConnection:select"
-        select_connection.POLLER_TYPE = 'select'
-        self.start(adapters.SelectConnection)
+        """SelectConnection:select"""
+
+        with mock.patch.multiple(select_connection, SELECT_TYPE='select'):
+            self.start(adapters.SelectConnection)
 
     @unittest.skipIf(
         not hasattr(select, 'poll') or
         not hasattr(select.poll(), 'modify'), "poll not supported")  # pylint: disable=E1101
     def select_poll_test(self):
-        "SelectConnection:poll"
-        select_connection.POLLER_TYPE = 'poll'
-        self.start(adapters.SelectConnection)
+        """SelectConnection:poll"""
+
+        with mock.patch.multiple(select_connection, SELECT_TYPE='poll'):
+            self.start(adapters.SelectConnection)
 
     @unittest.skipIf(not hasattr(select, 'epoll'), "epoll not supported")
     def select_epoll_test(self):
-        "SelectConnection:epoll"
-        select_connection.POLLER_TYPE = 'epoll'
-        self.start(adapters.SelectConnection)
+        """SelectConnection:epoll"""
+
+        with mock.patch.multiple(select_connection, SELECT_TYPE='epoll'):
+            self.start(adapters.SelectConnection)
 
     @unittest.skipIf(not hasattr(select, 'kqueue'), "kqueue not supported")
     def select_kqueue_test(self):
-        "SelectConnection:kqueue"
-        select_connection.POLLER_TYPE = 'kqueue'
-        self.start(adapters.SelectConnection)
+        """SelectConnection:kqueue"""
+
+        with mock.patch.multiple(select_connection, SELECT_TYPE='kqueue'):
+            self.start(adapters.SelectConnection)
 
     def tornado_test(self):
-        "TornadoConnection"
+        """TornadoConnection"""
         self.start(adapters.TornadoConnection)
 
     @unittest.skipIf(_TARGET == 'PyPy', 'PyPy is not supported')
     @unittest.skipIf(adapters.LibevConnection is None, 'pyev is not installed')
     def libev_test(self):
-        "LibevConnection"
+        """LibevConnection"""
         self.start(adapters.LibevConnection)
 
 
