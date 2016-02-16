@@ -1,5 +1,6 @@
 from setuptools import setup
 import os
+from pika import __version__
 
 # Conditionally include additional modules for docs
 on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
@@ -16,7 +17,7 @@ long_description = ('Pika is a pure-Python implementation of the AMQP 0-9-1 '
                     'with other AMQP 0-9-1 brokers.')
 
 setup(name='pika',
-      version='0.10.2',
+      version=__version__,
       description='Pika Python AMQP Client Library',
       long_description=open('README.rst').read(),
       maintainer='Gavin M. Roy',
