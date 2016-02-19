@@ -1,4 +1,5 @@
 """Core connection objects"""
+import socket
 import ast
 import sys
 import collections
@@ -954,6 +955,7 @@ class Connection(object):
         """
         return {
             'product': PRODUCT,
+            'host': socket.gethostname(),
             'platform': 'Python %s' % platform.python_version(),
             'capabilities': {
                 'authentication_failure_close': True,
